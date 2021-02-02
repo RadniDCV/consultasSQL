@@ -1,0 +1,97 @@
+DROP PROCEDURE "sp_DiasDispFiniquito";
+CREATE PROCEDURE "sp_DiasDispFiniquito"( IN FechaAct DATE,
+								IN EmpId VARCHAR(15),
+								IN dia INT,
+								IN mes INT,
+								IN Anio INT	)
+LANGUAGE SQLSCRIPT AS
+	Mensa 			NVARCHAR(100); 
+	FechaIni 		DATE;
+	TotalAnio 		DECIMAL(18,8);
+	TotalAnioint 	INT;
+	Counter 		INT;
+	PVCH 			INT;
+	Fecha 			DATE;
+	Hasta1          NVARCHAR(50);
+	TotalDisp2		DECIMAL(18,8);
+BEGIN
+	create LOCAL TEMPORARY TABLE #TAUX(
+		Nro  		INT,
+		Disp  		DECIMAL(18,8),
+		Total  		DECIMAL(18,8),
+		Usados  	DECIMAL(18,8),
+		TotalDisp   DECIMAL(18,8),
+		TotalTotal  DECIMAL(18,8),
+		TotalUsado  DECIMAL(18,8),
+		TotalDuo  	DECIMAL(18,8),
+		Desde 		DATE,
+		Hasta 		DATE);	
+	
+
+	PVCH:=50;
+	SELECT (SELECT COALESCE("fechaToStr"("startDate"),'0') FROM OHEM WHERE "empID" = :EmpId) INTO FechaIni FROM DUMMY;
+	SELECT (SELECT "startDate" FROM OHEM WHERE "empID" = :EmpId) INTO Fecha FROM DUMMY; 
+	
+	/*CALL "BD_GLOBAL"."ap_DiffDate"(FechaIni, FechaAct, dia, mes, Anio,Mensa);*/
+	
+	TotalAnio := (Anio*360+mes*30.0+dia)/360.0;
+	TotalAnioint := CAST((Anio*360.0+mes*30+dia)/360.0 AS INT);
+	Counter := 1;
+	
+	WHILE :Counter <= :TotalAnioint DO
+	
+	INSERT INTO #TAUX(Nro,Total) VALUES(:Counter,
+	(SELECT "U_ValProF1" FROM "PL_BD_GLOBAL"."@ADPR" WHERE "U_Entidad" = 'PLVAC' AND (:Counter BETWEEN "U_ValProF2" AND "U_ValProF3")));
+	
+	IF :TotalAnio - :TotalAnioint <> 0 THEN 
+		UPDATE #TAUX 
+		SET TotalDuo= (SELECT round(IFNULL("U_ValProF1",2)*(:TotalAnio - :TotalAnioint),0) FROM "PL_BD_GLOBAL"."@ADPR"
+		WHERE "U_Entidad" = 'PLVAC' AND (:TotalAnioint + 1 BETWEEN "U_ValProF2"  AND "U_ValProF3" ));
+	
+	END IF;
+	
+	UPDATE #TAUX 
+	SET Usados= (SELECT IFNULL(SUM("U_NUMDIAS"),0) FROM "BD_GLOBAL"."@PLVCH"
+				WHERE "U_EMPID"=:EmpId AND "U_ANIO"=:Counter AND "U_ESTADO"='A' 
+				/*AND TO_DATE("U_STARTDATE")=(SELECT "startDate" FROM OHEM WHERE "empID"=:EmpId)*/)
+				WHERE Nro=:Counter;
+	UPDATE #TAUX	
+	SET Disp= (SELECT COALESCE(Total,0) - COALESCE(Usados,0) FROM #TAUX WHERE Nro=:Counter)
+				WHERE Nro=:Counter;
+	SELECT (SELECT CAST(ADD_YEARS(:FECHA,1) AS NVARCHAR) FROM DUMMY) INTO hasta1 FROM DUMMY;
+	
+	UPDATE #TAUX
+	SET Desde= :Fecha,
+		Hasta = hasta1
+	WHERE Nro = :Counter;
+
+	Fecha:= hasta1;
+	Counter:= :Counter+1;	
+	
+	END WHILE;
+		
+	IF :TotalAnioint=0 THEN
+		INSERT INTO #TAUX(Nro,Total) VALUES(0,0);
+		IF :TotalAnio - :TotalAnioint <> 0 THEN 
+			UPDATE #TAUX 
+			SET TotalDuo = (SELECT round(COALESCE("U_ValProF1",0)*(:TotalAnio-:TotalAnioint),0) FROM "PL_BD_GLOBAL"."@ADPR" WHERE "U_Entidad"='PLVAC' AND (:TotalAnioint+1 BETWEEN "U_ValProF2" AND "U_ValProF3"))
+					,Nro=0;
+			UPDATE #TAUX	
+			SET Usados= (SELECT IFNULL(SUM("U_NUMDIAS"),0) FROM "BD_GLOBAL"."@PLVCH" WHERE "U_EMPID"=:EmpId AND "U_ANIO"=:Counter AND "U_ESTADO"='A' 
+			/*AND TO_DATE("U_STARTDATE")=(SELECT "startDate" FROM OHEM WHERE "empID"=:EmpId)*/)
+						WHERE Nro=0;
+		END IF;
+	END IF;
+	
+	SELECT (SELECT IFNULL(SUM(Disp),0) FROM #TAUX WHERE Nro>:TotalAnioint-:PVCH) INTO TotalDisp2 FROM DUMMY;
+    SELECT (SELECT IFNULL(MAX(totalduo),0) + :totaldisp2 from #TAUX) INTO TotalDisp2 FROM DUMMY;
+	
+	UPDATE #TAUX 
+	SET TotalDisp= :TotalDisp2,
+	TotalTotal = (SELECT SUM(Total) FROM #TAUX WHERE Nro>:TotalAnioint-:PVCH),
+	TotalUsado = (SELECT SUM(Usados) FROM #TAUX WHERE Nro>:TotalAnioint-:PVCH);	
+	SELECT "NRO", "DISP","TOTAL", "USADOS", "TOTALDISP","TOTALTOTAL",
+	"TOTALUSADO", "TOTALDUO" , "DESDE" ,"HASTA" FROM #TAUX;  
+DROP TABLE #TAUX;
+
+END;
